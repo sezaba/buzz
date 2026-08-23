@@ -1,0 +1,67 @@
+name: buzz-coolify
+
+# Relay-only compose file for a Coolify "Docker Compose" Application resource.
+#
+# Postgres, Redis, and MinIO are NOT defined here — they are separate Coolify
+# resources (Databases -> PostgreSQL / Redis, Services -> MinIO) created
+# independently in the Coolify UI, same as the Railway template wires each
+# dependency as its own service on the private network. This file only
+# describes the relay app itself; see README.md for the full setup.
+#
+# Do not add a custom `networks:` block — Coolify injects its own proxy
+# network into every service at deploy time so the built-in Traefik/Caddy
+# proxy can reach the container once you assign a domain in the UI.
+
+services:
+  relay:
+    image: ${BUZZ_IMAGE:-ghcr.io/block/buzz:main}
+    environment:
+      BUZZ_BIND_ADDR: 0.0.0.0:3000
+      BUZZ_HEALTH_PORT: "8080"
+      BUZZ_METRICS_PORT: "9102"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL from the Coolify PostgreSQL resource}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL from the Coolify Redis resource}
+      BUZZ_S3_ENDPOINT: ${BUZZ_S3_ENDPOINT:?set BUZZ_S3_ENDPOINT from the Coolify MinIO resource}
+      BUZZ_S3_ADDRESSING_STYLE: ${BUZZ_S3_ADDRESSING_STYLE:-path}
+      BUZZ_S3_ACCESS_KEY: ${BUZZ_S3_ACCESS_KEY:?set BUZZ_S3_ACCESS_KEY}
+      BUZZ_S3_SECRET_KEY: ${BUZZ_S3_SECRET_KEY:?set BUZZ_S3_SECRET_KEY}
+      BUZZ_S3_BUCKET: ${BUZZ_S3_BUCKET:-buzz-media}
+      BUZZ_GIT_REPO_PATH: /data/git
+      BUZZ_AUTO_MIGRATE: ${BUZZ_AUTO_MIGRATE:-false}
+      BUZZ_GIT_CONFORMANCE_PROBE: ${BUZZ_GIT_CONFORMANCE_PROBE:-true}
+      RELAY_OWNER_PUBKEY: ${RELAY_OWNER_PUBKEY:?set RELAY_OWNER_PUBKEY}
+      BUZZ_RELAY_PRIVATE_KEY: ${BUZZ_RELAY_PRIVATE_KEY:?set BUZZ_RELAY_PRIVATE_KEY}
+      BUZZ_GIT_HOOK_HMAC_SECRET: ${BUZZ_GIT_HOOK_HMAC_SECRET:?set BUZZ_GIT_HOOK_HMAC_SECRET}
+      RELAY_URL: ${RELAY_URL:?set RELAY_URL}
+      BUZZ_MEDIA_BASE_URL: ${BUZZ_MEDIA_BASE_URL:?set BUZZ_MEDIA_BASE_URL}
+      BUZZ_MEDIA_SERVER_DOMAIN: ${BUZZ_MEDIA_SERVER_DOMAIN:?set BUZZ_MEDIA_SERVER_DOMAIN}
+      BUZZ_CORS_ORIGINS: ${BUZZ_CORS_ORIGINS:?set BUZZ_CORS_ORIGINS}
+      BUZZ_REQUIRE_AUTH_TOKEN: ${BUZZ_REQUIRE_AUTH_TOKEN:-true}
+      BUZZ_REQUIRE_RELAY_MEMBERSHIP: ${BUZZ_REQUIRE_RELAY_MEMBERSHIP:-true}
+      BUZZ_ALLOW_NIP_OA_AUTH: ${BUZZ_ALLOW_NIP_OA_AUTH:-true}
+      RUST_LOG: ${RUST_LOG:-buzz_relay=info,buzz_db=info,buzz_auth=info,buzz_pubsub=info,tower_http=info}
+    # Internal container port only. Assign a domain to this resource in the
+    # Coolify UI (Ports Exposes: 3000) — Coolify wires its proxy from there;
+    # no host `ports:` mapping is needed or wanted.
+    expose:
+      - "3000"
+    volumes:
+      - buzz-git-data:/data/git
+    # Probe /_readiness over /dev/tcp because the runtime image has bash but
+    # no curl/wget/socat (same probe as deploy/compose/compose.yml).
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /_readiness HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  buzz-git-data:
+    labels:
+      com.buzz.volume: git
